@@ -7,12 +7,12 @@ const nextConfig: NextConfig = {
   eslint: {
     ignoreDuringBuilds: true,
   },
-  // Static export to bypass database issues
-  output: 'export',
-  trailingSlash: true,
-  images: {
-    unoptimized: true
-  }
+  // Simple configuration - no static export
+  experimental: {
+    appDir: true,
+  },
+  // Allow server-side features
+  poweredByHeader: false,
 }
 
 export default nextConfig
