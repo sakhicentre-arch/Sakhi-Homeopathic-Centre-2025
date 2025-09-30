@@ -1,55 +1,136 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 
-// --- FIX: ADDED THE MISSING GET FUNCTION ---
-// GET function to fetch visit history for a patient
 export async function GET(request: NextRequest) {
   try {
     const patientIdString = request.nextUrl.searchParams.get('patientId');
-    if (!patientIdString) {
-      return new NextResponse('Patient ID is required', { status: 400 });
+    
+    let consultations;
+    
+    if (patientIdString) {
+      const patientId = Number(patientIdString);
+      if (isNaN(patientId)) {
+        return new NextResponse('Invalid Patient ID format', { status: 400 });
+      }
+      
+      consultations = await prisma.consultation.findMany({
+        where: { patientId: patientId },
+        include: {
+          patient: { select: { name: true, phone: true } },
+          appointment: { select: { date: true, time: true } },
+          clinic: { select: { name: true } },
+          prescriptions: true,
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+    } else {
+      consultations = await prisma.consultation.findMany({
+        include: {
+          patient: { select: { name: true, phone: true } },
+          appointment: { select: { date: true, time: true } },
+          clinic: { select: { name: true } },
+          prescriptions: true,
+        },
+        orderBy: { createdAt: 'desc' },
+      });
     }
     
-    const patientId = Number(patientIdString);
-    if (isNaN(patientId)) {
-      return new NextResponse('Invalid Patient ID format', { status: 400 });
-    }
-
-    const visits = await prisma.visit.findMany({
-      where: { patientId: patientId },
-      orderBy: { date: 'desc' },
-    });
-
-    return NextResponse.json(visits);
+    return NextResponse.json(consultations);
   } catch (error) {
-    console.error("Failed to fetch visits:", error);
+    console.error('Failed to fetch consultations:', error);
     return new NextResponse('Internal Server Error', { status: 500 });
   }
 }
 
-// POST function to create a new visit
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { patientId, symptoms, diagnosis, fee, clinicId } = body;
+    console.log('Received consultation data:', body);
+    
+    const {
+      appointmentId,
+      chiefComplaint,
+      symptoms,
+      diagnosis,
+      treatmentPlan,
+      notes,
+      followUpDate,
+      prescriptions = []
+    } = body;
 
-    if (!patientId || !clinicId) {
-      return new NextResponse('Patient ID and Clinic ID are required', { status: 400 });
+    if (!appointmentId || !chiefComplaint) {
+      return NextResponse.json(
+        { error: 'Appointment ID and Chief Complaint are required' },
+        { status: 400 }
+      );
     }
 
-    const newVisit = await prisma.visit.create({
-      data: {
-        patientId: Number(patientId),
-        clinicId: Number(clinicId),
-        symptoms,
-        diagnosis,
-        fee: fee ? Number(fee) : 0,
+    const appointment = await prisma.appointment.findUnique({
+      where: { id: Number(appointmentId) },
+      include: { patient: true }
+    });
+
+    if (!appointment) {
+      return NextResponse.json(
+        { error: 'Appointment not found' },
+        { status: 404 }
+      );
+    }
+
+    const result = await prisma.$transaction(async (tx) => {
+      const consultation = await tx.consultation.create({
+        data: {
+          appointmentId: Number(appointmentId),
+          patientId: appointment.patient.id,
+          clinicId: appointment.clinicId,
+          userId: appointment.userId,
+          chiefComplaint,
+          symptoms: symptoms || null,
+          diagnosis: diagnosis || null,
+          treatmentPlan: treatmentPlan || null,
+          notes: notes || null,
+          followUpDate: followUpDate ? new Date(followUpDate) : null,
+        },
+      });
+
+      if (prescriptions && prescriptions.length > 0) {
+        await tx.prescription.createMany({
+          data: prescriptions.map((prescription: any) => ({
+            consultationId: consultation.id,
+            medicine: prescription.medicine,
+            dosage: prescription.dosage,
+            frequency: prescription.frequency,
+            duration: prescription.duration,
+            instructions: prescription.instructions || null,
+          })),
+        });
+      }
+
+      await tx.appointment.update({
+        where: { id: Number(appointmentId) },
+        data: { status: 'COMPLETED' },
+      });
+
+      return consultation;
+    });
+
+    const completeConsultation = await prisma.consultation.findUnique({
+      where: { id: result.id },
+      include: {
+        patient: { select: { name: true, phone: true } },
+        appointment: { select: { date: true, time: true } },
+        prescriptions: true,
       },
     });
 
-    return NextResponse.json(newVisit, { status: 201 });
+    console.log('Consultation created successfully:', completeConsultation);
+    return NextResponse.json(completeConsultation, { status: 201 });
+
   } catch (error) {
-    console.error("Failed to create visit:", error);
-    return new NextResponse('Internal Server Error', { status: 500 });
+    console.error('Failed to create consultation:', error);
+    return NextResponse.json(
+      { error: 'Internal Server Error' },
+      { status: 500 }
+    );
   }
 }

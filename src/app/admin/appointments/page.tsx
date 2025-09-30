@@ -1,137 +1,126 @@
-import { PrismaClient, AppointmentStatus } from '@prisma/client';
-import { revalidatePath } from 'next/cache';
+'use client';
 
-const prisma = new PrismaClient();
+import { useState, useEffect } from 'react';
 
-async function getAppointments() {
-  try {
-    const appointments = await prisma.appointment.findMany({
-      include: {
-        clinic: {
-          select: { name: true },
-        },
-      },
-      orderBy: {
-        appointmentTime: 'desc',
-      },
-    });
-    return appointments;
-  } catch (error) {
-    console.error("UI Data Fetch Error: Failed to fetch appointments for AppointmentsPage.", error);
-    return [];
-  }
+interface Appointment {
+  id: number;
+  date: string;
+  time: string;
+  status: string;
+  notes?: string;
+  patient: {
+    name: string;
+    phone: string;
+  };
+  clinic: {
+    name: string;
+  };
 }
 
-// Helper function to determine the status badge style
-const getStatusBadge = (status: AppointmentStatus, appointmentTime: Date) => {
-    const now = new Date();
-    const isPast = new Date(appointmentTime) < now;
+export default function AppointmentsPage() {
+  const [appointments, setAppointments] = useState<Appointment[]>([]);
+  const [loading, setLoading] = useState(true);
 
-    if (status === 'PENDING' && isPast) {
-        // Special status for past, pending appointments
-        return {
-            text: 'ATTENTION',
-            className: 'bg-red-100 text-red-800'
-        };
+  useEffect(() => {
+    fetchAppointments();
+  }, []);
+
+  const fetchAppointments = async () => {
+    try {
+      const response = await fetch('/api/appointments');
+      if (response.ok) {
+        const data = await response.json();
+        setAppointments(data);
+      }
+    } catch (error) {
+      console.error('Error fetching appointments:', error);
+    } finally {
+      setLoading(false);
     }
+  };
 
-    switch(status) {
-        case 'CONFIRMED':
-            return { text: 'CONFIRMED', className: 'bg-blue-100 text-blue-800' };
-        case 'COMPLETED':
-            return { text: 'COMPLETED', className: 'bg-green-100 text-green-800' };
-        case 'CANCELLED':
-            return { text: 'CANCELLED', className: 'bg-gray-100 text-gray-800' };
-        case 'PENDING':
-        default:
-            return { text: 'PENDING', className: 'bg-yellow-100 text-yellow-800' };
-    }
-};
-
-async function updateAppointmentStatus(appointmentId: number, newStatus: AppointmentStatus) {
-  'use server';
-  try {
-    await prisma.appointment.update({
-      where: { id: appointmentId },
-      data: { status: newStatus },
-    });
-    revalidatePath('/admin/appointments'); // Revalidate the page to show updated status
-  } catch (error) {
-    console.error(`Failed to update status for appointment ${appointmentId}:`, error);
-    // In a real app, you might want to return an error message to the client
+  if (loading) {
+    return <div style={{ padding: '20px' }}>Loading appointments...</div>;
   }
-}
-
-export default async function AppointmentsPage() {
-  const appointments = await getAppointments();
 
   return (
-    <div className="p-4 md:p-8 bg-gray-50 min-h-screen">
-      <div className="max-w-7xl mx-auto">
-        <h1 className="text-2xl md:text-3xl font-bold text-gray-900 mb-6">Patient Appointments</h1>
-        <div className="bg-white rounded-lg shadow-md overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-gray-200">
-              <thead className="bg-gray-50">
-                <tr>
-                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Patient Name</th>
-                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Phone Number</th>
-                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Appointment Time</th>
-                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Clinic</th>
-                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
-                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="bg-white divide-y divide-gray-200">
-                {appointments.length > 0 ? (
-                  appointments.map((appointment) => {
-                    const statusBadge = getStatusBadge(appointment.status, appointment.appointmentTime);
-                    return (
-                        <tr key={appointment.id}>
-                            <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{appointment.patientName}</td>
-                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{appointment.patientPhone}</td>
-                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                                {new Date(appointment.appointmentTime).toLocaleString('en-IN', { dateStyle: 'long', timeStyle: 'short' })}
-                            </td>
-                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{appointment.clinic.name}</td>
-                            <td className="px-6 py-4 whitespace-nowrap text-sm">
-                                <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${statusBadge.className}`}>
-                                    {statusBadge.text}
-                                </span>
-                            </td>
-                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                              <form action={updateAppointmentStatus}>
-                                <input type="hidden" name="appointmentId" value={appointment.id} />
-                                <select
-                                  name="newStatus"
-                                  defaultValue={appointment.status}
-                                  className="mt-1 block w-full py-2 px-3 border border-gray-300 bg-white rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
-                                  onChange={(e) => e.currentTarget.form?.requestSubmit()}
-                                >
-                                  {Object.values(AppointmentStatus).map((statusOption) => (
-                                    <option key={statusOption} value={statusOption}>
-                                      {statusOption}
-                                    </option>
-                                  ))}
-                                </select>
-                              </form>
-                            </td>
-                        </tr>
-                    );
-                  })
-                ) : (
-                  <tr>
-                    <td colSpan={5} className="px-6 py-4 text-center text-sm text-gray-500">No appointments found.</td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
+    <div style={{ padding: '20px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+        <h1>Patient Appointments</h1>
+        <a 
+          href="/admin/appointments/new" 
+          style={{
+            backgroundColor: '#4caf50',
+            color: 'white',
+            padding: '10px 20px',
+            textDecoration: 'none',
+            borderRadius: '4px',
+          }}
+        >
+          Book New Appointment
+        </a>
       </div>
+
+      {appointments.length === 0 ? (
+        <div style={{ textAlign: 'center', padding: '40px' }}>
+          <p>No appointments found.</p>
+          <a href="/admin/appointments/new" style={{ color: '#2196f3' }}>
+            Book the first appointment
+          </a>
+        </div>
+      ) : (
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead>
+              <tr style={{ backgroundColor: '#f5f5f5' }}>
+                <th style={{ padding: '12px', textAlign: 'left', borderBottom: '1px solid #ddd' }}>PATIENT NAME</th>
+                <th style={{ padding: '12px', textAlign: 'left', borderBottom: '1px solid #ddd' }}>PHONE NUMBER</th>
+                <th style={{ padding: '12px', textAlign: 'left', borderBottom: '1px solid #ddd' }}>APPOINTMENT TIME</th>
+                <th style={{ padding: '12px', textAlign: 'left', borderBottom: '1px solid #ddd' }}>CLINIC</th>
+                <th style={{ padding: '12px', textAlign: 'left', borderBottom: '1px solid #ddd' }}>STATUS</th>
+                <th style={{ padding: '12px', textAlign: 'left', borderBottom: '1px solid #ddd' }}>ACTIONS</th>
+              </tr>
+            </thead>
+            <tbody>
+              {appointments.map((appointment) => (
+                <tr key={appointment.id}>
+                  <td style={{ padding: '12px', borderBottom: '1px solid #eee' }}>
+                    {appointment.patient.name}
+                  </td>
+                  <td style={{ padding: '12px', borderBottom: '1px solid #eee' }}>
+                    {appointment.patient.phone}
+                  </td>
+                  <td style={{ padding: '12px', borderBottom: '1px solid #eee' }}>
+                    {new Date(appointment.date).toLocaleDateString()} at {appointment.time}
+                  </td>
+                  <td style={{ padding: '12px', borderBottom: '1px solid #eee' }}>
+                    {appointment.clinic.name}
+                  </td>
+                  <td style={{ padding: '12px', borderBottom: '1px solid #eee' }}>
+                    <span style={{
+                      padding: '4px 8px',
+                      borderRadius: '4px',
+                      fontSize: '12px',
+                      backgroundColor: appointment.status === 'SCHEDULED' ? '#e3f2fd' : '#f3e5f5',
+                      color: appointment.status === 'SCHEDULED' ? '#1976d2' : '#7b1fa2',
+                    }}>
+                      {appointment.status}
+                    </span>
+                  </td>
+                  <td style={{ padding: '12px', borderBottom: '1px solid #eee' }}>
+                    <button style={{ marginRight: '5px', padding: '4px 8px', fontSize: '12px' }}>
+                      Edit
+                    </button>
+                    <button style={{ padding: '4px 8px', fontSize: '12px' }}>
+                      Delete
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }
-
-
-

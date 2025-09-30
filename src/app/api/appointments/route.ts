@@ -3,17 +3,23 @@ import { NextResponse } from 'next/server';
 
 const prisma = new PrismaClient();
 
-// --- GET Function (No changes needed here) ---
+// --- GET Function ---
 export async function GET() {
   try {
     const appointments = await prisma.appointment.findMany({
       include: {
+        patient: {
+          select: { name: true, phone: true },
+        },
         clinic: {
+          select: { name: true },
+        },
+        user: {
           select: { name: true },
         },
       },
       orderBy: {
-        appointmentTime: 'desc',
+        date: 'desc',
       },
     });
     return NextResponse.json(appointments);
@@ -26,46 +32,100 @@ export async function GET() {
   }
 }
 
-// --- POST Function (Upgraded with Validation) ---
+// --- POST Function ---
 export async function POST(req: Request) {
   try {
-    const { patientName, patientPhone, appointmentTime, clinicId } = await req.json();
+    const body = await req.json();
+    console.log('Received appointment data:', body); // Debug log
+    
+    const { patientName, patientPhone, appointmentTime, date, time, clinicId, patientId, notes } = body;
 
     // 1. Basic Field Validation
-    if (!patientName || !patientPhone || !appointmentTime || !clinicId) {
-      return NextResponse.json({ error: 'All fields are required.' }, { status: 400 });
+    const appointmentDate = appointmentTime || date;
+    const appointmentTimeSlot = time || appointmentTime;
+    
+    if (!patientName && !patientId) {
+      return NextResponse.json({ error: 'Patient information is required.' }, { status: 400 });
+    }
+    
+    if (!appointmentDate) {
+      return NextResponse.json({ error: 'Appointment date is required.' }, { status: 400 });
     }
 
-    const appointmentDate = new Date(appointmentTime);
+    // 2. Handle patient - either find existing or create new
+    let patient;
+    
+    if (patientId) {
+      // Use existing patient
+      patient = await prisma.patient.findUnique({
+        where: { id: parseInt(patientId, 10) },
+      });
+      
+      if (!patient) {
+        return NextResponse.json({ error: 'Patient not found.' }, { status: 404 });
+      }
+    } else if (patientName && patientPhone) {
+      // Find or create patient by phone
+      patient = await prisma.patient.findFirst({
+        where: { phone: patientPhone },
+      });
+      
+      if (!patient) {
+        // Create new patient
+        patient = await prisma.patient.create({
+          data: {
+            name: patientName,
+            phone: patientPhone,
+            clinicId: parseInt(clinicId, 10) || 1,
+            userId: 1, // Default user
+          },
+        });
+      }
+    } else {
+      return NextResponse.json({ error: 'Patient name and phone are required for new patients.' }, { status: 400 });
+    }
+
+    // 3. Date/Time Processing
+    const appointmentDateTime = new Date(appointmentDate);
     const now = new Date();
 
-    // 2. Prevent Booking in the Past (with a 5-minute grace period)
-    if (appointmentDate < new Date(now.getTime() - 5 * 60 * 1000)) {
-        return NextResponse.json({ error: 'Cannot book an appointment in the past.' }, { status: 400 });
+    // Prevent booking in the past (with 5-minute grace period)
+    if (appointmentDateTime < new Date(now.getTime() - 5 * 60 * 1000)) {
+      return NextResponse.json({ error: 'Cannot book an appointment in the past.' }, { status: 400 });
     }
 
-    // 3. Indian Phone Number Validation (simple regex for 10 digits)
-    const phoneRegex = /^[6-9]\d{9}$/;
-    if (!phoneRegex.test(patientPhone)) {
+    // 4. Phone validation (if creating new patient)
+    if (patientPhone) {
+      const phoneRegex = /^[6-9]\d{9}$/;
+      if (!phoneRegex.test(patientPhone.replace(/\D/g, '').slice(-10))) {
         return NextResponse.json({ error: 'Please enter a valid 10-digit Indian mobile number.' }, { status: 400 });
+      }
     }
 
-    // 4. Validate appointment time against clinic operating hours
-    const clinic = await prisma.clinic.findUnique({
-      where: { id: parseInt(clinicId, 10) },
-      select: { startHour: true, endHour: true },
+    // 5. Create the appointment
+    const newAppointment = await prisma.appointment.create({
+      data: {
+        date: appointmentDateTime,
+        time: appointmentTimeSlot || appointmentDateTime.toTimeString().slice(0, 5), // HH:MM format
+        status: 'SCHEDULED',
+        notes: notes || null,
+        patientId: patient.id,
+        clinicId: parseInt(clinicId, 10) || 1,
+        userId: 1, // Default user (we'll improve this later)
+      },
+      include: {
+        patient: {
+          select: { name: true, phone: true },
+        },
+        clinic: {
+          select: { name: true },
+        },
+      },
     });
 
-    if (!clinic) {
-      return NextResponse.json({ error: 'Clinic not found.' }, { status: 404 });
-    }
-
-    const appointmentHour = appointmentDate.getHours();
-    if (appointmentHour < clinic.startHour || appointmentHour >= clinic.endHour) {
-      return NextResponse.json({ error: `Appointments can only be booked between ${clinic.startHour}:00 and ${clinic.endHour}:00.` }, { status: 400 });
-    }
-
+    console.log('Appointment created successfully:', newAppointment); // Debug log
     return NextResponse.json(newAppointment, { status: 201 });
+
   } catch (error) {
     console.error('API Error in POST /api/appointments:', error);
     return NextResponse.json(
