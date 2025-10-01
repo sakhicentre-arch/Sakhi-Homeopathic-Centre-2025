@@ -19,7 +19,6 @@
     "next-auth": "^4.24.11",
     "react": "19.1.0",
     "react-dom": "19.1.0"
-"next-auth": "^4.24.5"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3",
@@ -37,8 +36,8 @@
     "jest-environment-jsdom": "^29.7.0",
     "prisma": "^6.16.2",
     "tailwindcss": "^4",
-    "ts-jest": "^29.2.3",
-    "tsx": "^4.19.2",
+    "ts-jest": "^29.2.5",
+    "tsx": "^4.19.1",
     "typescript": "^5"
   }
 }
